@@ -108,104 +108,126 @@ func (c *TkgClient) SetMachineDeployment(options *SetMachineDeploymentOptions) e
 }
 
 // DoSetMachineDeployment sets a MachineDeployment on a cluster given a regional cluster client
-func DoSetMachineDeployment(clusterClient clusterclient.Client, options *SetMachineDeploymentOptions) error { //nolint:funlen,gocyclo
+func DoSetMachineDeployment(clusterClient clusterclient.Client, options *SetMachineDeploymentOptions) error {
+	md, err := findMachineDeployment(clusterClient, options)
+	if err != nil {
+		return err
+	}
+
+	if md == nil {
+		return createMachineDeployment(clusterClient, options)
+	}
+
+	applyMetadataFromOptions(md, options)
+
+	err = clusterClient.UpdateResource(md, md.Name, options.Namespace)
+	return errors.Wrap(err, "failed to update machinedeployment")
+}
+
+func applyMetadataFromOptions(md *capi.MachineDeployment, options *SetMachineDeploymentOptions) {
+	md.Annotations = map[string]string{}
+	if options.Replicas != nil {
+		md.Spec.Replicas = options.Replicas
+	}
+
+	if md.Labels == nil {
+		md.Labels = map[string]string{}
+	}
+	if md.Spec.Template.Labels == nil {
+		md.Spec.Template.Labels = map[string]string{}
+	}
+	if options.Labels != nil {
+		for k, v := range *options.Labels {
+			md.Spec.Template.Labels[k] = v
+		}
+	}
+}
+
+func findMachineDeployment(clusterClient clusterclient.Client, options *SetMachineDeploymentOptions) (*capi.MachineDeployment, error) {
 	workerMDs, err := clusterClient.GetMDObjectForCluster(options.ClusterName, options.Namespace)
 	if err != nil {
-		return errors.Wrap(err, "error retrieving worker machine deployments")
+		return nil, errors.Wrap(err, "error retrieving worker machine deployments")
 	}
 
 	if len(workerMDs) == 0 {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "MachineDeployment"}, "")
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "MachineDeployment"}, "")
 	}
 
 	nameMatcher, err := regexp.Compile(fmt.Sprintf("((%s)?-)?(%s)",
 		regexp.QuoteMeta(options.ClusterName), regexp.QuoteMeta(options.Name)))
 	if err != nil {
-		return errors.Wrap(err, "failed to parse node pool name")
+		return nil, errors.Wrap(err, "failed to parse node pool name")
 	}
 
-	baseMD := workerMDs[0]
-	update := false
 	for i := range workerMDs {
 		if nameMatcher.MatchString(workerMDs[i].Name) {
-			baseMD = workerMDs[i]
-			update = true
-			break
+			return &workerMDs[i], nil
 		}
 	}
 
-	baseMD.Annotations = map[string]string{}
-	if options.Replicas != nil {
-		baseMD.Spec.Replicas = options.Replicas
+	return nil, nil
+}
+
+func createMachineDeployment(clusterClient clusterclient.Client, options *SetMachineDeploymentOptions, baseMD *capi.MachineDeployment) error {
+	md := &capi.MachineDeployment{}
+	applyMetadataFromOptions(md, options)
+
+	kcTemplateName := baseMD.Spec.Template.Spec.Bootstrap.ConfigRef.Name
+	kcTemplate, err := retrieveKubeadmConfigTemplate(clusterClient, kcTemplateName, options.Namespace)
+	if err != nil {
+		return errors.Wrap(err, "unable to retrieve kubeadmconfigtemplate")
+	}
+	kcTemplate.Annotations = map[string]string{}
+	kcTemplate.ResourceVersion = ""
+
+	options.Name = fmt.Sprintf("%s-%s", options.ClusterName, options.Name)
+	machineTemplateName := fmt.Sprintf("%s-mt", options.Name)
+	kcTemplate.Name = fmt.Sprintf("%s-kct", options.Name)
+	if kcTemplate.Spec.Template.Spec.Files != nil && len(kcTemplate.Spec.Template.Spec.Files) > 0 {
+		kcTemplate.Spec.Template.Spec.Files[0].ContentFrom.Secret.Name = machineTemplateName + "-azure-json"
 	}
 
+	var labelsArg []string
 	if options.Labels != nil {
 		for k, v := range *options.Labels {
-			baseMD.Spec.Template.Labels[k] = v
+			labelsArg = append(labelsArg, fmt.Sprintf("%s=%s", k, v))
 		}
 	}
-
-	if !update {
-		kcTemplateName := baseMD.Spec.Template.Spec.Bootstrap.ConfigRef.Name
-		kcTemplate, err := retrieveKubeadmConfigTemplate(clusterClient, kcTemplateName, options.Namespace)
-		if err != nil {
-			return errors.Wrap(err, "unable to retrieve kubeadmconfigtemplate")
-		}
-		kcTemplate.Annotations = map[string]string{}
-		kcTemplate.ResourceVersion = ""
-
-		options.Name = fmt.Sprintf("%s-%s", options.ClusterName, options.Name)
-		machineTemplateName := fmt.Sprintf("%s-mt", options.Name)
-		kcTemplate.Name = fmt.Sprintf("%s-kct", options.Name)
-		if kcTemplate.Spec.Template.Spec.Files != nil && len(kcTemplate.Spec.Template.Spec.Files) > 0 {
-			kcTemplate.Spec.Template.Spec.Files[0].ContentFrom.Secret.Name = machineTemplateName + "-azure-json"
-		}
-
-		var labelsArg []string
-		if options.Labels != nil {
-			for k, v := range *options.Labels {
-				labelsArg = append(labelsArg, fmt.Sprintf("%s=%s", k, v))
-			}
-		}
-		sort.Strings(labelsArg)
-		kcTemplate.Spec.Template.Spec.JoinConfiguration.
-			NodeRegistration.KubeletExtraArgs["node-labels"] = strings.Join(labelsArg, ",")
-		if err = clusterClient.CreateResource(kcTemplate, kcTemplate.Name, options.Namespace); err != nil {
-			return errors.Wrap(err, "could not create kubeadmconfigtemplate")
-		}
-
-		switch iaasType := baseMD.Spec.Template.Spec.InfrastructureRef.Kind; iaasType {
-		case constants.VSphereMachineTemplate:
-			err = createVSphereMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
-		case constants.AWSMachineTemplate:
-			err = createAWSMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
-		case constants.AzureMachineTemplate:
-			err = createAzureMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
-		case constants.DockerMachineTemplate:
-			err = createDockerMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
-		default:
-			return errors.Errorf("unable to match MachineTemplate type: %s", iaasType)
-		}
-		if err != nil {
-			return err
-		}
-
-		baseMD.Name = options.Name
-		baseMD.ResourceVersion = ""
-		baseMD.Spec.Template.Labels[deploymentNameLabelKey] = options.Name
-		baseMD.Spec.Selector.MatchLabels[deploymentNameLabelKey] = options.Name
-		baseMD.Spec.Template.Spec.Bootstrap.ConfigRef.Name = kcTemplate.Name
-		baseMD.Spec.Template.Spec.InfrastructureRef.Name = machineTemplateName
-		if options.AZ != "" {
-			baseMD.Spec.Template.Spec.FailureDomain = &options.AZ
-		}
-
-		err = clusterClient.CreateResource(&baseMD, baseMD.Name, options.Namespace)
-		return errors.Wrap(err, "failed to create machinedeployment")
+	sort.Strings(labelsArg)
+	kcTemplate.Spec.Template.Spec.JoinConfiguration.
+		NodeRegistration.KubeletExtraArgs["node-labels"] = strings.Join(labelsArg, ",")
+	if err = clusterClient.CreateResource(kcTemplate, kcTemplate.Name, options.Namespace); err != nil {
+		return errors.Wrap(err, "could not create kubeadmconfigtemplate")
 	}
 
-	err = clusterClient.UpdateResource(&baseMD, baseMD.Name, options.Namespace)
-	return errors.Wrap(err, "failed to update machinedeployment")
+	switch iaasType := baseMD.Spec.Template.Spec.InfrastructureRef.Kind; iaasType {
+	case constants.VSphereMachineTemplate:
+		err = createVSphereMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
+	case constants.AWSMachineTemplate:
+		err = createAWSMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
+	case constants.AzureMachineTemplate:
+		err = createAzureMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
+	case constants.DockerMachineTemplate:
+		err = createDockerMachineTemplate(clusterClient, &baseMD.Spec.Template.Spec.InfrastructureRef, machineTemplateName, options)
+	default:
+		return errors.Errorf("unable to match MachineTemplate type: %s", iaasType)
+	}
+	if err != nil {
+		return err
+	}
+
+	md.Name = options.Name
+	md.ResourceVersion = ""
+	md.Spec.Template.Labels[deploymentNameLabelKey] = options.Name
+	md.Spec.Selector.MatchLabels[deploymentNameLabelKey] = options.Name
+	md.Spec.Template.Spec.Bootstrap.ConfigRef.Name = kcTemplate.Name
+	md.Spec.Template.Spec.InfrastructureRef.Name = machineTemplateName
+	if options.AZ != "" {
+		md.Spec.Template.Spec.FailureDomain = &options.AZ
+	}
+
+	err = clusterClient.CreateResource(md, md.Name, options.Namespace)
+	return errors.Wrap(err, "failed to create machinedeployment")
 }
 
 // SetNodePoolsForPacificCluster sets nodepool for Pacific cluster
