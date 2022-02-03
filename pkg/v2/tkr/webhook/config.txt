@@ -1,0 +1,2 @@
+
+id: "spec.ami.id" # string
