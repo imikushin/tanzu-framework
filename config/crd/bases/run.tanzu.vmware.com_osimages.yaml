@@ -70,7 +70,6 @@ spec:
                     description: Ref is a key-value map identifying the image within
                       the infrastructure provider. This is the data to be injected
                       into the infra-Machine objects (like AWSMachine) on creation.
-                    type: object
                     x-kubernetes-preserve-unknown-fields: true
                   type:
                     description: 'Type of the OSImage, roughly corresponding to the

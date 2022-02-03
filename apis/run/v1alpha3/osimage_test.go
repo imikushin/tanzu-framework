@@ -10,12 +10,18 @@ import (
 )
 
 func TestMachineImageInfo_DeepCopy(t *testing.T) {
+	const amiID = "ami-0f2e5eec7ae0a1986"
+	const isFoo = true
+	var ref interface{} = map[string]interface{}{
+		"id":    amiID,
+		"isFoo": isFoo,
+	}
 	imageInfo := &MachineImageInfo{
 		Type: "aws",
-		Ref: map[string]interface{}{
-			"id":    "ami-0f2e5eec7ae0a1986",
-			"isFoo": true,
-		},
+		Ref:  ref,
 	}
-	assert.Equal(t, imageInfo, imageInfo.DeepCopy())
+	imageInfoCopy := imageInfo.DeepCopy()
+	assert.Equal(t, imageInfo, imageInfoCopy)
+	assert.Equal(t, amiID, imageInfoCopy.Ref.(map[string]interface{})["id"])
+	assert.Equal(t, isFoo, imageInfoCopy.Ref.(map[string]interface{})["isFoo"])
 }

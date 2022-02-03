@@ -28,18 +28,18 @@ type MachineImageInfo struct {
 	// Ref is a key-value map identifying the image within the infrastructure provider. This is the data
 	// to be injected into the infra-Machine objects (like AWSMachine) on creation.
 	// +kubebuilder:validation:Schemaless
-	// +kubebuilder:validation:Type=object
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Ref map[string]interface{} `json:"ref"`
+	Ref interface{} `json:"ref"`
 }
 
 // DeepCopyInto is a deepcopy function, copying the receiver, writing into out. in must be non-nil.
 func (in *MachineImageInfo) DeepCopyInto(out *MachineImageInfo) {
 	*out = *in
 	if in.Ref != nil {
-		out.Ref = make(map[string]interface{}, len(in.Ref))
-		refBytes, _ := json.Marshal(in.Ref)    // ignoring error: the original data is a JSON object
-		_ = json.Unmarshal(refBytes, &out.Ref) // ignoring error: the original data is a JSON object
+		var outRef interface{}
+		refBytes, _ := json.Marshal(in.Ref)   // ignoring error: the original data is a JSON object
+		_ = json.Unmarshal(refBytes, &outRef) // ignoring error: the original data is a JSON object
+		out.Ref = outRef
 	}
 }
 
