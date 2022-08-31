@@ -28,7 +28,7 @@ query := data.Query{
     TKRSelector:      tkrSelector,
     OSImageSelector:  osImageSelector,
   },
-  MachineDeployments: map[string]data.OSImageQuery{
+  MachineDeployments: []data.OSImageQuery{ // TODO adjust to the current state of the code
     "md1": {
       K8sVersionPrefix: k8sVersionPrefix,
       TKRSelector:      tkrSelector,

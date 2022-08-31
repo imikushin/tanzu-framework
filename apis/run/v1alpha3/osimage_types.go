@@ -30,7 +30,7 @@ type OSInfo struct {
 // +kubebuilder:object:generate=false
 type MachineImageInfo struct {
 	// Type of the OSImage, roughly corresponding to the infrastructure provider (vSphere can serve both ova and vmop).
-	// Some of currently known types are: "ami", "azure", "docker", "ova", "vmop".
+	// Some of currently known types are: "ami", "azure", "docker", "ova", "vmop". // TODO update to the latest known types
 	Type string `json:"type"`
 
 	// Ref is a key-value map identifying the image within the infrastructure provider. This is the data
