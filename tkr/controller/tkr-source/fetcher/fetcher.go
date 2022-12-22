@@ -328,18 +328,10 @@ func (f *Fetcher) fetchTKRPackages(ctx context.Context) error {
 	default:
 	}
 
-	compatibleImageTags, err := f.compatibleImageTags(ctx)
+	imageTagsToPull, err := f.imageTagsToPull(ctx)
 	if err != nil {
 		return err
 	}
-
-	f.Log.Info("Listing TKR Package Repository tags", "image", f.Config.TKRRepoImagePath)
-	imageTags, err := f.Registry.ListImageTags(f.Config.TKRRepoImagePath)
-	if err != nil {
-		return errors.Wrap(err, "failed to list current available TKR Package Repository image tags")
-	}
-
-	imageTagsToPull := compatibleImageTags.Intersect(sets.Strings(imageTags...))
 
 	var errs []error
 	for tag := range imageTagsToPull {
@@ -350,6 +342,22 @@ func (f *Fetcher) fetchTKRPackages(ctx context.Context) error {
 
 	f.Log.Info("Done fetching TKR Packages", "image", f.Config.TKRRepoImagePath)
 	return kerrors.NewAggregate(errs)
+}
+
+func (f *Fetcher) imageTagsToPull(ctx context.Context) (sets.StringSet, error) {
+	compatibleImageTags, err := f.compatibleImageTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	f.Log.Info("Listing TKR Package Repository tags", "image", f.Config.TKRRepoImagePath)
+	imageTags, err := f.Registry.ListImageTags(f.Config.TKRRepoImagePath)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list current available TKR Package Repository image tags")
+	}
+
+	imageTagsToPull := compatibleImageTags.Intersect(sets.Strings(imageTags...))
+	return imageTagsToPull, nil
 }
 
 func (f *Fetcher) compatibleImageTags(ctx context.Context) (sets.StringSet, error) {
